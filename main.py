@@ -13,49 +13,60 @@ DATA_URL = "https://raw.githubusercontent.com/greatsong/modudata/bb860932644270a
 
 @st.cache_data
 def load_and_process_data():
-    # 데이터 불러오기 (UTF-8 인코딩)
-    df = pd.read_csv(DATA_URL, encoding="utf-8")
-    
-    # '날짜' 열을 datetime 형으로 변환 및 연도 추출
-    df["날짜"] = pd.to_datetime(df["날짜"])
-    df["연도"] = df["날짜"].dt.year
-    
-    # 결측치 제거 (평균기온 기준)
-    df = df.dropna(subset=["평균기온"])
-    
-    # 연도별 관측 일수 및 평균기온 계산
-    yearly_stats = df.groupby("연도").agg(
-        관측일수=("평균기온", "count"),
-        연평균기온=("평균기온", "mean")
-    ).reset_index()
-    
-    # 조건 필터링: 2025년 이하 & 관측일수 300일 이상
-    filtered_df = yearly_stats[
-        (yearly_stats["연도"] <= 2025) & (yearly_stats["관측일수"] >= 300)
-    ].copy()
-    
-    return filtered_df
+    try:
+        # 데이터 불러오기 (UTF-8 인코딩)
+        df = pd.read_csv(DATA_URL, encoding="utf-8")
+        
+        # '날짜' 열을 datetime 형으로 변환 및 연도 추출 (변환 불가 항목은 NaT 처리)
+        df["날짜"] = pd.to_datetime(df["날짜"], errors="coerce")
+        df["연도"] = df["날짜"].dt.year
+        
+        # '평균기온' 및 '연도' 결측치 제거
+        df = df.dropna(subset=["평균기온", "연도"])
+        df["연도"] = df["연도"].astype(int)
+        
+        # 연도별 관측 일수 및 평균기온 계산
+        yearly_stats = df.groupby("연도").agg(
+            관측일수=("평균기온", "count"),
+            연평균기온=("평균기온", "mean")
+        ).reset_index()
+        
+        # 조건 필터링: 2025년 이하 & 관측일수 300일 이상
+        filtered_df = yearly_stats[
+            (yearly_stats["연도"] <= 2025) & (yearly_stats["관측일수"] >= 300)
+        ].copy()
+        
+        return filtered_df
+    except Exception as e:
+        st.error(f"데이터를 불러오는 중 오류가 발생했습니다: {e}")
+        return pd.DataFrame()
 
 df_clean = load_and_process_data()
 
+if df_clean.empty:
+    st.warning("데이터를 불러오지 못했습니다. 인터넷 연결 상태나 데이터 URL을 확인해 주세요.")
+    st.stop()
+
 # 2. 회귀 모델 및 100년당 기온 상승량 계산
 # (1) 전체 기간
-x_all = df_clean["연도"].values
-y_all = df_clean["연평균기온"].values
+x_all = df_clean["연도"].values.astype(float)
+y_all = df_clean["연평균기온"].values.astype(float)
+
 slope_all, intercept_all = np.polyfit(x_all, y_all, 1)
-rate_100y_all = slope_all * 100  # 100년 동안의 기온 변화량 (°C)
-corr_coef_all = np.corrcoef(x_all, y_all)[0, 1]
+rate_100y_all = float(slope_all * 100)  # 100년 동안의 기온 변화량 (°C)
+corr_coef_all = float(np.corrcoef(x_all, y_all)[0, 1])
 
 # (2) 최근 20년 (마지막 연도 기준 최근 20년)
 max_year = int(x_all.max())
 df_recent = df_clean[df_clean["연도"] >= (max_year - 19)].copy()
-x_recent = df_recent["연도"].values
-y_recent = df_recent["연평균기온"].values
+x_recent = df_recent["연도"].values.astype(float)
+y_recent = df_recent["연평균기온"].values.astype(float)
+
 slope_recent, intercept_recent = np.polyfit(x_recent, y_recent, 1)
-rate_100y_recent = slope_recent * 100  # 100년 환산 기온 변화량 (°C)
+rate_100y_recent = float(slope_recent * 100)  # 100년 환산 기온 변화량 (°C)
 
 # 학습 데이터 기본 정보
-num_years = len(df_clean)
+num_years = int(len(df_clean))
 start_year = int(x_all.min())
 end_year = int(x_all.max())
 
@@ -70,7 +81,7 @@ target_year = st.sidebar.slider(
 )
 
 # 전체 기간 회귀식 기준 선택 연도 예상 기온
-predicted_temp = slope_all * target_year + intercept_all
+predicted_temp = float(slope_all * target_year + intercept_all)
 
 # 4. 화면 구성: 100년당 온난화 속도 비교 (큰 지표)
 st.subheader("🔥 서울 기온 상승 속도 비교 (100년당 상승량)")
